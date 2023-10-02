@@ -1,0 +1,15 @@
+start: expression
+
+comma_expr: "," expression
+          | "," expression comma_expr
+
+expression: "(" expression ")"
+          | "(" expression comma_expr ")"
+          | expression binop expression
+          | unop expression
+          | NUMBER
+
+NUMBER	    : /\d+/
+
+binop		: "-"|"+"|"*"|"/"
+unop        : "-"

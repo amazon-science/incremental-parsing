@@ -1,0 +1,26 @@
+urllib3==1.26.6
+transformers~=4.30.2
+torch~=1.13.1
+torchvision
+torchaudio
+regex~=2023.5.5
+lark~=1.1.5
+datasets~=2.12.0
+tokenizers~=0.13.3
+accelerate
+bitsandbytes
+scipy
+tqdm
+hapless
+networkx
+mypy
+types-urllib3
+types-regex
+types-tqdm
+jupyter
+matplotlib
+ansi
+cchardet
+pandas
+numpy
+# pygraphviz # Only needed for notebooks/create_parse_hierarchy_viz

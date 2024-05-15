@@ -2,6 +2,7 @@
 
 This repository contains code to perform incremental parsing for Python for constrained generation of code by LLMs. 
 
+
 ## Installation
 
 For exact reproducibility, we are using CUDA version 12.0, driver version 525.85.12, on a A100 GPU.
@@ -36,9 +37,11 @@ You can also use the following interactive scripts in the `notebooks` directory:
   parsable, or cannot be a prefix of a member of the quotient language.
 - `paper_examples.ipynb` reproduces code generation examples.
 
+
 ## Security
 
 See [CONTRIBUTING](CONTRIBUTING.md#security-issue-notifications) for more information.
+
 
 ## License
 

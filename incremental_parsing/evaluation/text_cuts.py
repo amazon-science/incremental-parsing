@@ -2,19 +2,23 @@ import io
 import random
 import tokenize
 from tokenize import TokenInfo
-from typing import Tuple, List
+from typing import Tuple, List, Optional
 
 
-def cut_text_random(text: str, min_cut_percentage: float, max_cut_percentage: float, cut_amount: float) -> Tuple[
+def cut_text_random(text: str, min_cut_percentage: float, max_cut_percentage: float, cut_amount: float, cut_no_more_than: Optional[int] = None) -> Tuple[
     str, str, str]:
     """
     Take a random point "p" between min_cut_percentage and max_cut_percentage of the way through the file.
     Split it into 3 parts: before p, from p to p+cut_amount, and from p+cut_amount to the end.
     Note that p+cut_amount might be > 1, in which case middle will be smaller than cut_amount and suffix will be empty
+    cut_no_more_than is a limit on the amount of text (in characters) that can be cut.
     """
     cut_percentage = min_cut_percentage + (max_cut_percentage - min_cut_percentage) * random.random()
     cut_index = int(cut_percentage * len(text))
     cut_amount = cut_amount * len(text)
+    if cut_no_more_than is not None:
+        cut_amount = min(cut_amount, cut_no_more_than)
+
     cut_end = cut_index + int(cut_amount)
     prefix = text[:cut_index]
     middle = text[cut_index:cut_end]

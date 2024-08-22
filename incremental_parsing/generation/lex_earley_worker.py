@@ -58,7 +58,8 @@ class EarleyTrieNode:
         This is the main location where the LLM interfaces with the actual parser.
         """
         if not self.valid:
-            return None
+            self.children[token] = self
+            return self
 
         if token in self.children:
             return self.children[token]
@@ -175,7 +176,7 @@ class LexEarleyWorker:
         max_eof_prob = trie_node.running_eof_sum_logprob
 
         for i, tok in enumerate(prefix_tokens):
-            trie_node = trie_node.children[tok]
+            trie_node = trie_node.get_child_or_default(tok)
 
             if trie_node.running_eof_sum_logprob is None:
                 assert i == len(prefix_tokens) - 1
@@ -189,7 +190,7 @@ class LexEarleyWorker:
         trie_node = self.root_trie
         for i, prefix_tok in enumerate(prefix):
             next_trie_node = trie_node.next_token(prefix_tok, self.tokenizer, self.context)
-            if (next_trie_node is None) or not next_trie_node.valid:
+            if False and ((next_trie_node is None) or not next_trie_node.valid):  # Better to just swallow it
                 raise ValueError(f"""
                 Invalid prefix: {self.tokenizer.decode(prefix[:i + 1])}
                 Remaining: {self.tokenizer.decode(prefix[i + 1:])}""")

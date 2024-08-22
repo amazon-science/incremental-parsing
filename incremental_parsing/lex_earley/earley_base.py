@@ -46,7 +46,6 @@ class TopLevel:
 
 @dataclass(frozen=True)
 class Scanned:
-    token: Token
     from_chart_idx: int
     from_state_idx: int
 
@@ -61,7 +60,6 @@ class Predicted:
 class PredictedNullableCompletion:
     from_chart_idx: int
     from_state_idx: int
-    production_name: str
 
 
 @dataclass(frozen=True)
@@ -90,6 +88,12 @@ class LexEarleyAlgorithmChart(NamedTuple):
     def get_states_and_creation_methods(self) -> Sequence[Tuple[LexEarleyState, Iterable[StateCreationMethod]]]:
         return self.states
 
+    def __len__(self):
+        return len(self.states)
+
+    def __getitem__(self, idx: int) -> Tuple[LexEarleyState, Iterable[StateCreationMethod]]:
+        return self.states[idx]
+
 
 def scan_all(grammar: SimpleBNF, prev_chart: Iterable[StatePlusCreationMethods], prev_chart_idx: int, symbol: Token) \
         -> List[Tuple[LexEarleyState, StateCreationMethod]]:
@@ -99,8 +103,7 @@ def scan_all(grammar: SimpleBNF, prev_chart: Iterable[StatePlusCreationMethods],
             next_element = state.next_element(grammar)
             if isinstance(next_element, BNFTerminal):
                 if next_element.name == symbol.name:
-                    next_states_ordered.append((state.advance(), Scanned(token=symbol,
-                                                                         from_chart_idx=prev_chart_idx,
+                    next_states_ordered.append((state.advance(), Scanned(from_chart_idx=prev_chart_idx,
                                                                          from_state_idx=state_idx)))
 
     return next_states_ordered
@@ -218,7 +221,6 @@ def predictor(state: LexEarleyState, next_rule_name: str, grammar: SimpleBNF, cu
         adder(state.advance(), PredictedNullableCompletion(
             from_chart_idx=current_chart_idx,
             from_state_idx=predicted_from_state_idx,
-            production_name=next_rule_name
         ))
 
 

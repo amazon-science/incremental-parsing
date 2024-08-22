@@ -2,8 +2,8 @@ import unittest
 from collections import defaultdict
 from typing import NamedTuple, Union, Tuple, Dict, AbstractSet, Iterable, FrozenSet, Set, Container, \
     DefaultDict, List
-
 from numpy.ma.testutils import assert_equal
+from incremental_parsing._native import BridgeBNFElement, BridgeBNFProduction, BridgeBNFRule, BridgeBNFGrammar
 
 
 class BNFTerminal(NamedTuple):
@@ -12,12 +12,18 @@ class BNFTerminal(NamedTuple):
     def __str__(self):
         return self.name
 
+    def to_bridge(self):
+        return BridgeBNFElement.Terminal(self.name)
+
 
 class BNFNonterminal(NamedTuple):
     name: str
 
     def __str__(self):
         return self.name
+
+    def to_bridge(self):
+        return BridgeBNFElement.Nonterminal(self.name)
 
 
 BNFElement = Union[BNFTerminal, BNFNonterminal]
@@ -35,6 +41,9 @@ class SimpleBNFProduction(NamedTuple):
     def reverse(self) -> "SimpleBNFProduction":
         return SimpleBNFProduction(tuple(reversed(self.elements)))
 
+    def to_bridge(self) -> BridgeBNFProduction:
+        return BridgeBNFProduction(tuple(element.to_bridge() for element in self.elements))
+
 
 class SimpleBNFRule(NamedTuple):
     productions: Tuple[SimpleBNFProduction, ...]
@@ -44,6 +53,9 @@ class SimpleBNFRule(NamedTuple):
 
     def reverse(self) -> "SimpleBNFRule":
         return SimpleBNFRule(tuple(prod.reverse() for prod in self.productions))
+
+    def to_bridge(self) -> BridgeBNFProduction:
+        return BridgeBNFRule(tuple(prod.to_bridge() for prod in self.productions))
 
 
 class SimpleBNF:
@@ -217,6 +229,13 @@ class SimpleBNF:
 
     def __str__(self):
         return "\n\n".join(f"{name} : {rule}" for name, rule in self.rules.items())
+
+    def to_bridge(self):
+        return BridgeBNFGrammar(rules={name: rule.to_bridge() for (name, rule) in self.rules.items()},
+                                top_level_rules=self.top_level_rules)
+
+    def to_native(self):
+        return self.to_bridge().to_native()
 
 
 class TestBNFEndingIn(unittest.TestCase):

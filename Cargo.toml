@@ -1,0 +1,18 @@
+[package]
+name = "incremental_parsing_rust"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "incremental_parsing_rust"
+crate-type = ["cdylib"]
+
+[profile.release]
+debug = true
+
+[dependencies.pyo3]
+version = "0.21.2"
+features = ["extension-module", "abi3-py39"]
+
+#[dependencies.regex-automata]
+#features = ["dfa-search", "std", "syntax", "dfa-build"]

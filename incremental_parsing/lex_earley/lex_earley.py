@@ -1,7 +1,7 @@
 import abc
 import itertools
 from dataclasses import dataclass
-from typing import NamedTuple, Tuple, List, Any, Optional, Iterable, TypeVar, Union, Sequence, Dict
+from typing import NamedTuple, Tuple, List, Any, Optional, Iterable, TypeVar, Union, Sequence, Dict, Type
 
 from typing_extensions import Self
 
@@ -9,11 +9,13 @@ from incremental_parsing.lex_earley.branch_guard.combined_guard import LexerBran
 from incremental_parsing.lex_earley.branch_guard.lexer_branch_guard import LexerBranchGuard
 from incremental_parsing.lex_earley.earley_base import LexEarleyState, LexEarleyAlgorithmChart, \
     TopLevel, initial_chart_allowed_tokens
-from incremental_parsing.lex_earley.earley_nfa import token_branches_to_nfa, EarleyNFA
+from incremental_parsing.lex_earley.earley_nfa import token_branches_to_nfa, EarleyNFA, AbstractEarleyNFA
 from incremental_parsing.lex_earley.earley_trie import EarleyTrieNode, DummyEarleyTrieNode, AbstractEarleyTrieNode
 from incremental_parsing.lex_earley.lexer import AbstractLexer, LexResult, LexResultFailure, LexResultPartial, \
     LexResultBranch, LexResultSuccess, Token
 from incremental_parsing.lex_earley.middle_earley import create_middle_bnf, create_parse_hierarchy
+from incremental_parsing.lex_earley.native_earley_nfa import NativeEarleyNFA
+from incremental_parsing.lex_earley.native_earley_trie import NativeEarleyTrieNode
 from incremental_parsing.lex_earley.simple_bnf import SimpleBNF
 from incremental_parsing.utils.lookback_trie import LookbackTrieNode
 
@@ -454,17 +456,13 @@ def lex_earley_step(context: LexEarleyAlgorithmContext, state: LexEarleyAlgorith
         return lex_earley_step_middle(context=context, state=state, char=char)
 
 
-def lex_earley_init(context: LexEarleyAlgorithmContext, lookahead: str = "") -> LexEarleyAlgorithmPrefixState:
+def lex_earley_init(context: LexEarleyAlgorithmContext, lookahead: str = "", earley_class: Type[AbstractEarleyTrieNode] = NativeEarleyTrieNode) -> LexEarleyAlgorithmPrefixState:
     """
     Initializes the LexEarley algorithm.
     """
-    initial_chart, initial_allowed_tokens = initial_chart_allowed_tokens(context.grammar)
-    root_node: LookbackTrieNode[LexEarleyAlgorithmChart] = LookbackTrieNode.create_root_node()
-    initial_earley_trie = EarleyTrieNode(grammar=context.grammar,
-                                         charts=root_node.get_child(initial_chart),
-                                         allowed_token_names=tuple(initial_allowed_tokens))
+    initial_earley_trie = earley_class.create_root(grammar=context.grammar)
 
-    initial_lex_result = context.lexer.initialize(initial_hint=initial_allowed_tokens)
+    initial_lex_result = context.lexer.initialize(initial_hint=initial_earley_trie.allowed_token_names)
     initial_branches_results = process_lex_result(
         parent_branch_state=EarleyParserBranchState(
             branch_guard=None,
@@ -571,26 +569,15 @@ def is_complete(context: LexEarleyAlgorithmContext, state: LexEarleyAlgorithmSta
 
 def _to_suffix_parser_state(context: LexEarleyAlgorithmContext,
                             state: LexEarleyAlgorithmPrefixState,
-                            suffix: str,
-                            make_dummy_trie: bool) -> LexEarleyAlgorithmSuffixState:
+                            suffix: str) -> LexEarleyAlgorithmSuffixState:
     assert state.lookahead_str == "", f"Called to_suffix_parser_state when lookahead " \
                                       f"string {state.lookahead_str} not empty"
     assert not state.seen_eof, f"Called to_suffix_parser_state after an EOF"
 
-    initial_suffix_states = get_all_possible_earley_states(context.grammar, 0)
-    initial_suffix_chart = LexEarleyAlgorithmChart(
-        states=tuple((state, (TopLevel(),)) for state in initial_suffix_states))
-    root_node: LookbackTrieNode[LexEarleyAlgorithmChart] = LookbackTrieNode.create_root_node()
+    initial_suffix_earley_trie = DummyEarleyTrieNode(
+        parent=None, this_token=None,
+        allowed_token_names=tuple(context.lexer.get_all_possible_token_names()))
 
-    initial_suffix_earley_trie: AbstractEarleyTrieNode
-    if make_dummy_trie:
-        initial_suffix_earley_trie = DummyEarleyTrieNode(
-            parent=None, this_token=None,
-            allowed_token_names=tuple(context.lexer.get_all_possible_token_names()))
-    else:
-        initial_suffix_earley_trie = EarleyTrieNode(grammar=context.grammar,
-                                                    charts=root_node.get_child(initial_suffix_chart),
-                                                    allowed_token_names=())
 
     results = []
     for branch in state.branches:
@@ -634,7 +621,9 @@ def _parse_token_sequence(earley_trie: EarleyTrieNode,
 
 def _to_middle_parser_state(context: LexEarleyAlgorithmContext,
                             state: LexEarleyAlgorithmSuffixState,
-                            middle_lookahead: str) -> LexEarleyAlgorithmMiddleState:
+                            middle_lookahead: str,
+                            earley_class: Type[AbstractEarleyTrieNode],
+                            earley_nfa_class: Type[AbstractEarleyNFA]) -> LexEarleyAlgorithmMiddleState:
     assert state.lookahead_str == "", f"Called to_middle_parser_state when lookahead string not empty"
     assert state.seen_eof, f"Called to_middle_parser_state before EOF"
 
@@ -654,14 +643,14 @@ def _to_middle_parser_state(context: LexEarleyAlgorithmContext,
         reverse_token_sequences.append(tuple(suffix_dummy_trie.get_reverse_token_sequence()))
 
     token_nfa, stream_endpoints = token_branches_to_nfa(reverse_token_sequences)
-    earley_nfa = EarleyNFA(reversed_bnf, token_nfa)
+    earley_nfa = earley_nfa_class.create(reversed_bnf, token_nfa)
 
     results: List[LexEarleyMiddleBranchState] = []
     for branch_ids_with_endpoints, suffix_endpoints in stream_endpoints:
         for branch_id in branch_ids_with_endpoints:
             branch = state.branches[branch_id]
-            prefix_charts = tuple(branch.prefix_state.earley_trie[:])
-            if not any(earley_nfa.charts[final_idx].processed_states_ordered for final_idx in suffix_endpoints):
+            prefix_charts = branch.prefix_state.earley_trie
+            if not any(earley_nfa.charts[final_idx].get_states_and_creation_methods() for final_idx in suffix_endpoints):
                 # This branch is not a valid parse
                 continue
 
@@ -688,7 +677,8 @@ def _to_middle_parser_state(context: LexEarleyAlgorithmContext,
                                              suffix_lexer_state=branch.suffix_state.lexer_state,
                                              context=context,
                                              middle_bnf=middle_bnf,
-                                             middle_lookahead=middle_lookahead))
+                                             middle_lookahead=middle_lookahead,
+                                             earley_class=earley_class))
 
     global _num_branches_in_middle
     _num_branches_in_middle = len(results)
@@ -705,7 +695,8 @@ def _to_middle_parser_state(context: LexEarleyAlgorithmContext,
 def _to_middle_branch(prefix_branch_guard: Optional[LexerBranchGuard],
                       prefix_branch_guard_state: Any,
                       suffix_lexer_state: Any,
-                      context, middle_bnf, middle_lookahead) -> Sequence[LexEarleyMiddleBranchState]:
+                      context, middle_bnf, middle_lookahead,
+                      earley_class: Type[AbstractEarleyTrieNode]) -> Sequence[LexEarleyMiddleBranchState]:
     middle_lexer_state, last_tokens = context.lexer.to_middle_lexer_state(suffix_lexer_state)
 
     if last_tokens:
@@ -716,11 +707,8 @@ def _to_middle_branch(prefix_branch_guard: Optional[LexerBranchGuard],
         lexer=context.lexer
     )
 
-    middle_chart_init, initial_middle_allowed_tokens = initial_chart_allowed_tokens(middle_bnf)
-    root_node: LookbackTrieNode[LexEarleyAlgorithmChart] = LookbackTrieNode.create_root_node()
-    middle_trie_node = EarleyTrieNode(grammar=middle_bnf,
-                                      charts=root_node.get_child(middle_chart_init),
-                                      allowed_token_names=tuple(initial_middle_allowed_tokens))
+    middle_trie_node = earley_class.create_root(grammar=middle_bnf)
+    initial_middle_allowed_tokens = middle_trie_node.allowed_token_names
 
     initial_branch_state = EarleyParserBranchState(
         branch_guard=prefix_branch_guard,
@@ -765,15 +753,17 @@ def get_and_reset_stats() -> Dict[str, int]:
 
 
 def lex_earley_to_middle(context: LexEarleyAlgorithmContext, state: LexEarleyAlgorithmPrefixState,
-                         suffix: str, middle_lookahead: str) -> LexEarleyAlgorithmMiddleState:
+                         suffix: str, middle_lookahead: str,
+                         earley_class: Type[AbstractEarleyTrieNode] = NativeEarleyTrieNode,
+                         earley_nfa_class: Type[AbstractEarleyNFA] = NativeEarleyNFA) -> LexEarleyAlgorithmMiddleState:
     global _num_branches_in_middle
     global _num_branches_after_first_suffix_lexeme
-    suffix_state: LexEarleyAlgorithmState = _to_suffix_parser_state(context, state, suffix, True)
+    suffix_state: LexEarleyAlgorithmState = _to_suffix_parser_state(context, state, suffix)
     _num_branches_after_first_suffix_lexeme = len(suffix_state.branches)
     suffix_state = lex_earley_run(context, suffix_state, suffix)
     suffix_state = force_eof(context, suffix_state)
     assert isinstance(suffix_state, LexEarleyAlgorithmSuffixState)
-    middle_parser_state = _to_middle_parser_state(context, suffix_state, middle_lookahead)
+    middle_parser_state = _to_middle_parser_state(context, suffix_state, middle_lookahead, earley_class, earley_nfa_class)
     _num_branches_in_middle = len(middle_parser_state.branches)
     return middle_parser_state
 

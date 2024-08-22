@@ -41,17 +41,7 @@ def parse_top_level_file(top_level_file: Path):
                 return results
 
             elif len(filename_parts) == 4 and filename_parts[3] == "err":
-                return [{
-                    "data_idx": int(filename_parts[0]),
-                    "cut_idx": int(filename_parts[1]),
-                    "seed_idx": int(filename_parts[2]),
-                    "parse_orig": 1,
-                    "parse_earley": 1,
-                    "successful_generation": 1,
-                    "parse_constrained": 0,
-                    "parse_unconstrained": 0,
-                    "differs": 0
-                }]
+                raise Exception("Error during generation, you should check that out: " + top_level_file.name)
             else:
                 raise Exception("Unexpected filename format:  " + top_level_file.name)
         else:
@@ -75,13 +65,18 @@ def parse_top_level_file(top_level_file: Path):
                     if not is_complete:
                         continue  # Allow us to use this script during active generation
 
+
                     prefix_suffix_constrained = None
+                    constrained_hit_max_attempts = False
                     if not constrained.exists():
                         # This "full_constrained" refers to constrained generation which might
                         # be cut off at a wrong spot
-                        assert (seed_path / "full_constrained").exists()
                         constrained_parse = False
                         constrained_clipped_generation = False
+
+                        if not (seed_path / "full_constrained").exists():
+                            assert (seed_path / "constrained_max_num_attempts").exists()
+                            constrained_hit_max_attempts = True
                     else:
                         constrained_text = constrained.read_text()
                         prefix_suffix_constrained = prefix + constrained_text + suffix
@@ -93,6 +88,9 @@ def parse_top_level_file(top_level_file: Path):
                         except SyntaxError as e:
                             error_message = f"{e.__class__.__name__}: {e.msg}"
                             constrained_parse = False
+                        except (ValueError, MemoryError) as e:
+                            error_message = f"{e.__class__.__name__}: {e.args[0]}"
+                            constrained_parse = False
 
                     unconstrained_text = unconstrained.read_text()
                     prefix_suffix_unconstrained = prefix + unconstrained_text + suffix
@@ -100,7 +98,7 @@ def parse_top_level_file(top_level_file: Path):
                     try:
                         ast.parse(prefix_suffix_unconstrained)
                         unconstrained_parse = True
-                    except (SyntaxError, MemoryError):
+                    except (SyntaxError, MemoryError, ValueError):
                         unconstrained_parse = False
 
                     unconstrained_checked_exists = unconstrained_checked.exists()
@@ -116,7 +114,7 @@ def parse_top_level_file(top_level_file: Path):
                         "seed_idx": seed_idx,
                         "parse_orig": 1,
                         "parse_earley": 1,
-                        "successful_generation": 1,
+                        "successful_generation": int(not constrained_hit_max_attempts),
                         "successful_clipped_generation": int(constrained_clipped_generation),
                         "parse_constrained": int(constrained_parse),
                         "parse_unconstrained": int(unconstrained_parse),
@@ -143,11 +141,17 @@ def stack_results(results_dir: Path, summary_csv: Path):
                                                "num_branches_after_first_suffix_lexeme",
                                                "error_message",
                                                "pre_time", "total_constrained_time", "num_constrained_tokens",
+                                               "num_constrained_chars", "num_constrained_output_chars",
+                                               "num_unconstrained_chars", "num_unconstrained_output_chars",
                                                "num_unconstrained_tokens", "unconstrained_generation_time",
                                                "constrained_overhead_p50", "constrained_overhead_p90",
+                                               "constrained_overhead_mean", "constrained_overhead_num",
                                                "constrained_overhead_eval_p50", "constrained_overhead_eval_p90",
+                                               "constrained_overhead_eval_mean", "constrained_overhead_eval_num",
                                                "unconstrained_checking_overhead_p50",
                                                "unconstrained_checking_overhead_p90",
+                                               "unconstrained_checking_overhead_mean",
+                                               "unconstrained_checking_overhead_num",
                                                "prefix_size", "suffix_size"])
         writer.writeheader()
 
@@ -170,5 +174,13 @@ def stack_results(results_dir: Path, summary_csv: Path):
 
 
 if __name__ == "__main__":
-    stack_results(Path(sys.argv[1]),
-                  Path(sys.argv[2]))
+    src = Path(sys.argv[1])
+    assert src.is_dir()
+    if len(sys.argv) == 2:
+        dest = src.parent / f"{src.stem}.csv"
+    else:
+        dest = Path(sys.argv[2])
+
+    assert not dest.exists()
+
+    stack_results(src, dest)

@@ -1,12 +1,16 @@
+import abc
 import unittest
+from abc import abstractmethod
 from collections import deque, defaultdict
 from typing import List, Tuple, Set, Dict, Deque, DefaultDict, Iterable, Sequence, Callable, FrozenSet
 
 from incremental_parsing.lex_earley.earley_base import LexEarleyState, StateCreationMethod, \
     completer, predictor, Completed, Scanned, TopLevel
 from incremental_parsing.lex_earley.lexer import Token
+from incremental_parsing.lex_earley.middle_earley import ContainsStatesAndCreationMethods
 from incremental_parsing.lex_earley.simple_bnf import SimpleBNF, BNFNonterminal, SimpleBNFRule, SimpleBNFProduction, \
     BNFTerminal
+from incremental_parsing.utils.indexable_container import IndexableContainer
 from incremental_parsing.utils.simple_nfa import SimpleNFA, SimpleNFAMutable
 
 StatePlusCreationMethodsMut = Tuple[LexEarleyState, Set[StateCreationMethod]]
@@ -54,7 +58,7 @@ class EarleyNFAChart:
         self.processed_states_ordered.append((state, set()))
 
         if state.is_complete():
-            states_from_span_start = (item[0] for item in context.charts[state.span_start].processed_states_ordered)
+            states_from_span_start = (item[0] for item in context._charts[state.span_start].processed_states_ordered)
 
             completer(
                 items_in_span_start=states_from_span_start,
@@ -66,7 +70,7 @@ class EarleyNFAChart:
                 adder=adder
             )
 
-            context.charts[state.span_start].completer_hooks[state.rule_name].append((self.chart_idx, state_idx))
+            context._charts[state.span_start].completer_hooks[state.rule_name].append((self.chart_idx, state_idx))
         else:
             next_element = state.next_element(context.grammar)
             if isinstance(next_element, BNFNonterminal):
@@ -94,8 +98,7 @@ class EarleyNFAChart:
                         and next_element.name in context.nfa.atom_transitions_forward[self.chart_idx]:
                     for next_chart_idx in context.nfa.atom_transitions_forward[self.chart_idx][next_element.name]:
                         context.add_state(next_chart_idx, state.advance(),
-                                          Scanned(Token(name=next_element.name, text=""),
-                                                  from_chart_idx=self.chart_idx,
+                                          Scanned(from_chart_idx=self.chart_idx,
                                                   from_state_idx=state_idx))
 
         return state_idx
@@ -103,20 +106,42 @@ class EarleyNFAChart:
     def get_states_and_creation_methods(self) -> Sequence[Tuple[LexEarleyState, Iterable[StateCreationMethod]]]:
         return self.processed_states_ordered
 
+    def __len__(self):
+        return len(self.processed_states_ordered)
 
-class EarleyNFA:
+    def __getitem__(self, index : int) -> Tuple[LexEarleyState, Iterable[StateCreationMethod]]:
+        return self.processed_states_ordered[index]
+
+
+class AbstractEarleyNFA(abc.ABC):
+    @classmethod
+    @abstractmethod
+    def create(cls, grammar: SimpleBNF, nfa: SimpleNFA[str, str]):
+        pass
+
+    @property
+    @abstractmethod
+    def charts(self) -> IndexableContainer[ContainsStatesAndCreationMethods]:
+        pass
+
+
+class EarleyNFA(AbstractEarleyNFA):
     grammar: SimpleBNF
     nfa: SimpleNFA[str, str]
-    charts: Dict[int, EarleyNFAChart]
+    _charts: Dict[int, EarleyNFAChart]
     state_processing_queue: Deque[Tuple[int, LexEarleyState, StateCreationMethod]]
 
     def __init__(self, grammar: SimpleBNF, nfa: SimpleNFA[str, str]):
         self.grammar = grammar
         self.nfa = nfa
-        self.charts = {chart_idx: EarleyNFAChart(chart_idx) for chart_idx in self.nfa.states}
+        self._charts = {chart_idx: EarleyNFAChart(chart_idx) for chart_idx in self.nfa.states}
         self.state_processing_queue = deque()
         self._add_initial_states_to_queue()
         self._process_all_states()
+
+    @classmethod
+    def create(cls, grammar: SimpleBNF, nfa: SimpleNFA[str, str]):
+        return cls(grammar, nfa)
 
     def _add_top_level_to_chart(self, chart_idx: int):
         for initial_rule in self.grammar.top_level_rules:
@@ -139,11 +164,11 @@ class EarleyNFA:
             self._process_state(chart_idx, state, creation_method)
 
     def _process_state(self, chart_idx: int, state: LexEarleyState, creation_method: StateCreationMethod):
-        state_idx = self.charts[chart_idx].processed_states.get(state, None)
+        state_idx = self._charts[chart_idx].processed_states.get(state, None)
         if state_idx is None:
-            state_idx = self.charts[chart_idx].process_new_state(state=state, context=self)
+            state_idx = self._charts[chart_idx].process_new_state(state=state, context=self)
 
-        self.charts[chart_idx].processed_states_ordered[state_idx][1].add(creation_method)
+        self._charts[chart_idx].processed_states_ordered[state_idx][1].add(creation_method)
 
     def add_state(self, chart_idx: int, state: LexEarleyState, creation_method: StateCreationMethod):
         self.state_processing_queue.append((chart_idx, state, creation_method))
@@ -151,10 +176,14 @@ class EarleyNFA:
     def is_valid_final_state(self, state_idx: int) -> bool:
         return any(state.is_complete() and state.rule_name in self.grammar.top_level_rules
                    and state.span_start in self.nfa.start_states
-                   for state, _ in self.charts[state_idx].processed_states_ordered)
+                   for state, _ in self._charts[state_idx].processed_states_ordered)
 
     def is_complete(self) -> bool:
         return any(self.is_valid_final_state(state) for state in self.nfa.end_states)
+
+    @property
+    def charts(self) -> IndexableContainer[ContainsStatesAndCreationMethods]:
+        return self._charts
 
 
 def token_to_nfa(token: Token, nfa: SimpleNFAMutable, prev_state: int, token_end_state: int):

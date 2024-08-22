@@ -16,6 +16,12 @@ class TokenProbabilityTrieNode:
             self.running_sum_logprob + child_logprob, self.hypothesis_length + 1)
         return self.children[child_token]
 
+    def get_child_or_default(self, child_token: int):
+        if child_token in self.children:
+            return self.children[child_token]
+        else:
+            return self.add_child(child_token, float("-inf"))
+
     def set_eof_probability(self, eof_sum_logprob: float):
         self.running_eof_sum_logprob = eof_sum_logprob + self.running_sum_logprob
 

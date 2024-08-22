@@ -1,7 +1,7 @@
 -- INSTRUCTIONS
 -- evaluate_stack.py takes the output folder of stack_completion_right_context.py and makes a nice CSV file out of it
 -- Creating a database out of the results makes it easy to work with them instead of needing to write redundant code
--- I used the Pycharm SQL import tool to create a SQLite table named `stack`
+-- I use the Pycharm SQL import tool to create a SQLite table named `stack`
 -- Then, all the numbers in the paper come from the results of running these statements.
 
 -- data_idx: Index in the-stack-smol-xl/data/python
@@ -19,86 +19,32 @@
 --      Divide this by the number of sub-languages created for indentation
 -- num_branches_in_middle: How many sub-languages after lexing the right context
 
--- How many experiments in all
-SELECT COUNT(*)
+-- Table body
+SELECT COUNT(*), parse_constrained, parse_unconstrained, parse_unconstrained_checked
 FROM stack
-WHERE parse_earley = 1;
+WHERE parse_earley = 1
+GROUP BY parse_constrained, parse_unconstrained, parse_unconstrained_checked;
 
--- How many parse with constrained generation
-SELECT COUNT(*)
+-- Bottom margin
+SELECT COUNT(*), parse_constrained
 FROM stack
-WHERE parse_constrained = 1
-  AND parse_earley = 1;
+WHERE parse_earley = 1
+GROUP BY parse_constrained;
 
--- How many parse with unconstrained generation
-SELECT COUNT(*)
+-- Side margin
+SELECT COUNT(*), parse_unconstrained, parse_unconstrained_checked
 FROM stack
-WHERE parse_unconstrained = 1
-  AND parse_earley = 1;
+WHERE parse_earley = 1
+GROUP BY  parse_unconstrained, parse_unconstrained_checked;
 
--- How many parse with checked unconstrained generation
-SELECT COUNT(*)
+-- Breakdown of failure cases
+SELECT COUNT(*), parse_unconstrained, parse_unconstrained_checked, successful_clipped_generation
 FROM stack
-WHERE parse_unconstrained_checked = 1
-  AND parse_earley = 1;
+WHERE parse_earley = 1 and parse_constrained = 0 and successful_generation = 1
+GROUP BY stack.parse_unconstrained, parse_unconstrained_checked, successful_clipped_generation;
 
--- Constrained fails but unconstrained succeeds
-SELECT COUNT(*)
-FROM stack
-WHERE parse_unconstrained = 1
-  AND parse_constrained = 0
-  AND parse_earley = 1;
-
--- Unconstrained fails but constrained succeeds
-SELECT COUNT(*)
-FROM stack
-WHERE parse_unconstrained = 0
-  AND parse_constrained = 1
-  AND parse_earley = 1;
-
--- Constrained fails but checked unconstrained succeeds
-SELECT COUNT(*)
-FROM stack
-WHERE parse_unconstrained_checked = 1
-  AND parse_constrained = 0
-  AND parse_earley = 1;
-
--- Checked unconstrained fails but constrained succeeds
-SELECT COUNT(*)
-FROM stack
-WHERE parse_unconstrained_checked = 0
-  AND parse_constrained = 1
-  AND parse_earley = 1;
-
--- Parser incorrectly identified a left context
-SELECT COUNT(*)
-FROM stack
-WHERE parse_constrained = 0
-  AND successful_clipped_generation = 1
-  AND parse_earley = 1;
-
--- Unconstrained generation sometimes succeeds in these constrained-generation failure modes
-SELECT COUNT(*)
-FROM stack
-WHERE parse_constrained = 0
-  AND successful_clipped_generation = 1
-  AND parse_unconstrained = 1
-  AND parse_earley = 1;
-
--- Parser never identified left context
-SELECT COUNT(*)
-FROM stack
-WHERE parse_constrained = 0
-  AND successful_clipped_generation = 0
-  AND parse_earley = 1;
-
--- Unconstrained generation rarely/never succeeds in this failure mode
-SELECT COUNT(*)
-FROM stack
-WHERE parse_constrained = 0
-  AND successful_clipped_generation = 0
-  AND parse_unconstrained = 1
-  AND parse_earley = 1;
+SELECT median(constrained_overhead_mean), median(constrained_overhead_eval_mean), median(unconstrained_checking_overhead_mean)
+FROM stack WHERE parse_unconstrained_checked = 1 and parse_constrained = 1;
 
 -- What error messages are given show up
 SELECT error_message, COUNT(*) as c
@@ -107,11 +53,20 @@ WHERE error_message NOT NULL
 GROUP BY error_message
 ORDER by c DESC;
 
+-- Specific cases with error messages for debugging
+SELECT stack.data_idx, stack.cut_idx, stack.error_message
+from stack
+where error_message NOT null;
+
 -- How many branches are due to LCFL (divide by 2 because of extra indentation branches)
 SELECT stack.num_branches_after_first_suffix_lexeme / 2, COUNT(*)
 FROM stack
 WHERE parse_earley = 1
 GROUP BY stack.num_branches_after_first_suffix_lexeme;
+
+SELECT AVG(stack.num_branches_after_first_suffix_lexeme / 2), median(stack.num_branches_after_first_suffix_lexeme / 2), stdev(stack.num_branches_after_first_suffix_lexeme/2)
+FROM stack
+WHERE parse_earley = 1;
 
 -- How many branches due to LCFL + Indentation
 SELECT stack.num_branches_in_middle, COUNT(*)

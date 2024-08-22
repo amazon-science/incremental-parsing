@@ -6,21 +6,24 @@ This repository contains code to perform incremental parsing for Python for cons
 ## Installation
 
 For exact reproducibility, we are using CUDA version 12.0, driver version 525.85.12, on a A100 GPU.
-Python version 3.9.17.
+Python version 3.9.19, and the Rust toolchain version 1.79.0.
 We use the version of Santacoder that was released on December 20, 2022.
 
 1. Install everything in requirements.txt.
-2. Edit `scripts/constrained_generation_{random/nice}_cuts.sh` so that `results_path` is an absolute path.
+2. Run `maturin develop --release` in your virtual environment.
+   - Note that IDEs sometimes have trouble with automatic code completion for this. 
+     As long as you get the message `Installed incremental_parsing_rust-0.1.0`, the library is installed in the virtual environment.
+3. Edit `scripts/constrained_generation_{random/nice}_cuts.sh` so that `results_path` is an absolute path.
    The program will create a (large) folder at this path.
    Also, edit the loop max, device name, and min/max data indices so that it fits your hardware and eventually loops
    through data indices 0 through 9999.
-3. `PYTHONPATH=. scripts/constrained_generation_random_cuts.sh`
-    1. Read the documentation for `hapless` (`hap --help`) for information about process management
-4. When done, edit the source path at the bottom of `incremental_parsing/evaluation/evaluate_stack.py` to match the
+4. `PYTHONPATH=. scripts/constrained_generation_random_cuts.sh`
+   - Read the documentation for `hapless` (`hap --help`) for information about process management
+5. When done, edit the source path at the bottom of `incremental_parsing/evaluation/evaluate_stack.py` to match the
    results path.
    Edit the destination path to be somewhere you want a csv file to be created.
-5. Import the csv file into a sqlite table named `stack`, and then use `incremental_parsing/evaluation/gen_tables.sql`
-   to obtain the numbers.
+6. Import the csv file into a sqlite table named `stack`, and then use `incremental_parsing/evaluation/gen_tables.sql`
+   to obtain the numbers from the paper.
 
 You can also use the following interactive scripts in the `notebooks` directory:
 

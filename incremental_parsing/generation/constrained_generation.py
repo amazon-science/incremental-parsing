@@ -5,7 +5,7 @@ import torch
 from transformers import PreTrainedTokenizer, GenerationMixin, LogitsProcessorList
 
 from incremental_parsing.generation.lex_earley_worker import LexEarleyWorker
-from incremental_parsing.generation.logits_processor import LexEarleyLogitsProcessor
+from incremental_parsing.generation.logits_processor import LexEarleyLogitsProcessor, MaxNumAtempts
 from incremental_parsing.generation.utils import tokenizer_int64, create_balanced_context, color_idx
 from incremental_parsing.lex_earley.lex_earley import LexEarleyAlgorithmContext, lex_earley_init, lex_earley_run, \
     is_complete, LexEarleyAlgorithmState
@@ -115,6 +115,7 @@ def prefix_suffix_constrained_generation(tokenizer: PreTrainedTokenizer,
                                          beam_size: int,
                                          max_generation_length: int,
                                          device: str,
+                                         num_token_finding_attempts: Optional[int] = None,
                                          debug: Union[bool, str] = False) -> \
         Tuple[Optional[str], str, datetime.timedelta, datetime.timedelta, Sequence[datetime.timedelta],
         Sequence[datetime.timedelta]]:
@@ -138,6 +139,7 @@ def prefix_suffix_constrained_generation(tokenizer: PreTrainedTokenizer,
         prefix_text=prefix_text, suffix_text=suffix_text,
         pre_input_ids=pre_input_ids, post_input_ids=post_input_ids,
         beam_size=beam_size, max_generation_length=max_generation_length,
+        num_token_finding_attempts=num_token_finding_attempts,
         debug=debug
     )
 
@@ -153,6 +155,7 @@ def do_prefix_suffix_constrained_generation(tokenizer: PreTrainedTokenizer,
                                             post_input_ids: torch.Tensor,
                                             beam_size: int,
                                             max_generation_length: int,
+                                            num_token_finding_attempts: Optional[int] = None,
                                             debug: Union[bool, str] = False
                                             ) -> \
         Tuple[Optional[str], str, datetime.timedelta, datetime.timedelta, Sequence[datetime.timedelta],
@@ -176,26 +179,31 @@ def do_prefix_suffix_constrained_generation(tokenizer: PreTrainedTokenizer,
     len_input_tokens = input_ids.shape[1]
     earley_worker = LexEarleyWorker(context=context, tokenizer=tokenizer)
     earley_logits_processor = LexEarleyLogitsProcessor(worker=earley_worker, beam_size=beam_size,
-                                                       eof_id=tokenizer.eos_token_id)
+                                                       eof_id=tokenizer.eos_token_id,
+                                                       max_iter_attempts=num_token_finding_attempts)
     start_time = datetime.datetime.now()
     earley_worker.set_prefix_suffix(pre_input_ids[0].numpy().tolist(), post_input_ids[0].numpy().tolist())
     after_prefix_suffix_time = datetime.datetime.now()
     earley_worker.ignore_k_toks(len_input_tokens)
-    outputs_constrained = model.generate(input_ids=input_ids, attention_mask=attention_mask,
+    try:
+        outputs_constrained = model.generate(input_ids=input_ids, attention_mask=attention_mask,
                                          max_new_tokens=max_generation_length,
                                          logits_processor=LogitsProcessorList([earley_logits_processor]),
                                          # stopping_criteria=StoppingCriteriaList([stopping_criteria]),
                                          num_beams=beam_size, num_return_sequences=1, early_stopping=True)
-    end_time = datetime.datetime.now()
-    new_output_tokens_constrained = outputs_constrained[0][len_input_tokens:]
-    text, full_text = extract_best_middle(earley_worker=earley_worker,
-                                          tokenizer=tokenizer,
-                                          new_output_tokens_constrained=new_output_tokens_constrained,
-                                          context=context,
-                                          prefix_text=prefix_text,
-                                          suffix_text=suffix_text,
-                                          debug=debug)
+        new_output_tokens_constrained = outputs_constrained[0][len_input_tokens:]
+        text, full_text = extract_best_middle(earley_worker=earley_worker,
+                                              tokenizer=tokenizer,
+                                              new_output_tokens_constrained=new_output_tokens_constrained,
+                                              context=context,
+                                              prefix_text=prefix_text,
+                                              suffix_text=suffix_text,
+                                              debug=debug)
+    except MaxNumAtempts:
+        text = None
+        full_text = None
 
+    end_time = datetime.datetime.now()
     tok_times, eval_times = earley_logits_processor.get_and_reset_times()
 
     return (text, full_text, after_prefix_suffix_time - start_time, end_time - after_prefix_suffix_time,

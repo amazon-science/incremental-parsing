@@ -1,5 +1,6 @@
 import datetime
-from typing import List, Tuple
+import itertools
+from typing import List, Tuple, Optional
 
 import torch
 from transformers import LogitsProcessor
@@ -7,14 +8,26 @@ from transformers import LogitsProcessor
 from incremental_parsing.generation.lex_earley_worker import LexEarleyWorker
 
 
+class MaxNumAtempts(Exception):
+    pass
+
+
 class LexEarleyLogitsProcessor(LogitsProcessor):
-    def __init__(self, worker: LexEarleyWorker, beam_size: int, eof_id: int, debug: bool = False):
+    def __init__(self, worker: LexEarleyWorker, beam_size: int, eof_id: int, debug: bool = False, max_iter_attempts: Optional[int] = None):
         self.beam_size = beam_size
         self.worker = worker
         self.eof_id = eof_id
         self.debug = debug
         self.overall_token_times: List[datetime.timedelta] = []
         self.per_evaluation_times: List[datetime.timedelta] = []
+        self.max_iter_attempts = max_iter_attempts
+
+        # The following hack accounts for santacoder being weird about its pad IDs
+        pad_token_input = worker.tokenizer("<fim-pad>").input_ids
+        if len(pad_token_input) == 1 and pad_token_input[0] in worker.tokenizer.all_special_ids:
+            self.pad_token_id = pad_token_input[0]
+        else:
+            self.pad_token_id = worker.tokenizer.pad_token_id
 
     def get_and_reset_times(self) -> Tuple[List[datetime.timedelta], List[datetime.timedelta]]:
         ot, pe = self.overall_token_times, self.per_evaluation_times
@@ -24,6 +37,9 @@ class LexEarleyLogitsProcessor(LogitsProcessor):
 
     def __call__(self, input_ids, scores):
         assert len(scores.shape) == 2
+
+        if self.pad_token_id is not None:
+            scores[:, self.pad_token_id] = float("-inf")
 
         scores_log_softmax = torch.log_softmax(scores, dim=1)
 
@@ -36,7 +52,7 @@ class LexEarleyLogitsProcessor(LogitsProcessor):
 
         time_start = datetime.datetime.now()
 
-        while True:
+        for _ in (range(self.max_iter_attempts) if self.max_iter_attempts is not None else itertools.count()):
             # Keep going until we have enough tokens that the parser likes
             top_k = torch.topk(scores, self.beam_size, dim=1)
             top_k_softmax = torch.topk(scores_log_softmax, self.beam_size, dim=1)
@@ -71,13 +87,18 @@ class LexEarleyLogitsProcessor(LogitsProcessor):
                     print(f"({sum(results)})")
 
             # Hopefully we don't get stuck here?
-            if total_toks + total_eof_valid < self.beam_size * 2:
+            if total_toks + total_eof_valid < (1 if self.beam_size == 1 else self.beam_size * 2):
                 if self.debug:
                     print("Not enough allowable tokens, generating more")
                 for i in range(scores.shape[0]):
                     scores[i][top_k.indices[i]] = float("-inf")
             else:
                 break
+        else:
+            # Max num iterations reached, just send an EOF
+            if self.debug:
+                raise MaxNumAtempts()
+            result[:,self.eof_id] = 1
 
         if self.debug:
             print("-----")

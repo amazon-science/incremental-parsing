@@ -1,6 +1,8 @@
 import curses
 from typing import List, Tuple
 
+from incremental_parsing.lex_earley.earley_nfa import EarleyNFA
+from incremental_parsing.lex_earley.earley_trie import EarleyTrieNode
 from incremental_parsing.lex_earley.lark_grammar import get_python_context
 from incremental_parsing.lex_earley.lex_earley import lex_earley_init, LexEarleyAlgorithmState, is_complete, \
     is_completable, lex_earley_step, lex_earley_to_middle
@@ -8,10 +10,11 @@ from incremental_parsing.lex_earley.lex_earley import lex_earley_init, LexEarley
 
 def run(stdscr):
     context = get_python_context()
-    current_state: LexEarleyAlgorithmState = lex_earley_init(context)
+    current_state: LexEarleyAlgorithmState = lex_earley_init(context, earley_class=EarleyTrieNode)
 
-    if False:
-        current_state = lex_earley_to_middle(context, current_state, "", "")
+    if True:
+        current_state = lex_earley_to_middle(context, current_state, "", "",
+                                             earley_class=EarleyTrieNode, earley_nfa_class=EarleyNFA)
 
     tokens: List[Tuple[str, LexEarleyAlgorithmState]] = []
 

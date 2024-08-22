@@ -20,6 +20,8 @@ class PythonIndenterState(NamedTuple):
     init_max_indent: Optional[int]
     loose_indents_dedents: Union[None, Literal["indent_first"], Literal["none_or_dedent_first"]]
     initial_indents_include: Tuple[int, ...]
+    only_seen_multiples_of: Optional[int]
+    allow_change_of_multiples: bool
 
     @property
     def min_paren_level(self) -> int:
@@ -105,6 +107,21 @@ DEDENT_type = '_DEDENT'
 TAB_LEN = 8
 
 
+def next_indent_multiple(indent: int, seen_multiple_of: Optional[int]) -> Optional[int]:
+    if indent == 0 or seen_multiple_of == -1:
+        return seen_multiple_of
+    elif seen_multiple_of is None:  # First indentation we've seen
+        return indent
+    elif indent % seen_multiple_of == 0:  # Indented correctly
+        return seen_multiple_of
+    else:   # Inconsistent indentation: don't care
+        return -1
+
+
+def is_valid_multiple(indent: int, seen_multiple_of: Optional[int], allow_multiple_change: bool) -> bool:
+    return allow_multiple_change or seen_multiple_of is None or seen_multiple_of == -1 or indent % seen_multiple_of == 0
+
+
 class PythonLexWrapper(AbstractLexer[PythonLexWrapperState[TI]], Generic[TI]):
     def __init__(self, lexer: AbstractLexer[TI], ignore_tokens: Iterable[str]):
         self.lexer = lexer
@@ -119,7 +136,9 @@ class PythonLexWrapper(AbstractLexer[PythonLexWrapperState[TI]], Generic[TI]):
             queued_hint=None,
             loose_indents_dedents=None,
             initial_indents_include=(0,),
-            init_max_indent=None
+            init_max_indent=None,
+            only_seen_multiples_of=None,
+            allow_change_of_multiples=True
         )
 
         init_hint_tup = self.calc_modified_hint(initial_indenter_state,
@@ -180,7 +199,9 @@ class PythonLexWrapper(AbstractLexer[PythonLexWrapperState[TI]], Generic[TI]):
                 queued_hint=None,
                 loose_indents_dedents=lexer_state.loose_indents_dedents,
                 initial_indents_include=lexer_state.initial_indents_include,
-                init_max_indent=lexer_state.init_max_indent
+                init_max_indent=lexer_state.init_max_indent,
+                only_seen_multiples_of=lexer_state.only_seen_multiples_of,
+                allow_change_of_multiples=lexer_state.allow_change_of_multiples
             )),
         elif inner_token.name in CLOSE_PAREN_types:
             if lexer_state.max_paren_level == 0:
@@ -197,7 +218,9 @@ class PythonLexWrapper(AbstractLexer[PythonLexWrapperState[TI]], Generic[TI]):
                     queued_hint=None,
                     loose_indents_dedents=lexer_state.loose_indents_dedents,
                     initial_indents_include=lexer_state.initial_indents_include,
-                    init_max_indent=lexer_state.init_max_indent
+                    init_max_indent=lexer_state.init_max_indent,
+                    only_seen_multiples_of=lexer_state.only_seen_multiples_of,
+                    allow_change_of_multiples=lexer_state.allow_change_of_multiples
                 )),
             else:
                 # Min paren level >= 1; just adjust the diff
@@ -209,7 +232,9 @@ class PythonLexWrapper(AbstractLexer[PythonLexWrapperState[TI]], Generic[TI]):
                     queued_hint=None,
                     loose_indents_dedents=lexer_state.loose_indents_dedents,
                     initial_indents_include=lexer_state.initial_indents_include,
-                    init_max_indent=lexer_state.init_max_indent
+                    init_max_indent=lexer_state.init_max_indent,
+                    only_seen_multiples_of=lexer_state.only_seen_multiples_of,
+                    allow_change_of_multiples=lexer_state.allow_change_of_multiples
                 )),
         elif inner_token.name == NL_type:
             # If min level == 0
@@ -237,118 +262,145 @@ class PythonLexWrapper(AbstractLexer[PythonLexWrapperState[TI]], Generic[TI]):
                 # And an indent or dedent is processed
 
                 indent_str = inner_token.text.rsplit('\n', 1)[-1].rsplit('\r', 1)[-1]  # Tabs and spaces
+                num_space_tabs_at_beginning = len(indent_str) - len(indent_str.lstrip())
+                indent_str = indent_str[:num_space_tabs_at_beginning]
                 indent = indent_str.count(' ') + indent_str.count('\t') * TAB_LEN
 
                 # current_indent_levels = lexer_state.indent_levels
                 # result_tokens = [inner_token]
                 # skip_this_branch = False
+                if is_valid_multiple(indent=indent, seen_multiple_of=lexer_state.only_seen_multiples_of, allow_multiple_change=lexer_state.allow_change_of_multiples):
+                    if lexer_state.indent_levels is None:
+                        assert lexer_state.loose_indents_dedents
 
-                if lexer_state.indent_levels is None:
-                    assert lexer_state.loose_indents_dedents
-
-                    if indent != 0 and lexer_state.loose_indents_dedents == "indent_first":
-                        # Handle case where the first newline is really an indent
-                        possible_results.append(((inner_token, Token(INDENT_type, "")),
-                                                 PythonIndenterState(
-                                                     indent_levels=(indent,),
-                                                     current_paren_diff_level=lexer_state.current_paren_diff_level,
-                                                     init_min_paren_level=lexer_state.init_min_paren_level,
-                                                     init_max_paren_level=lexer_state.init_min_paren_level,
-                                                     # So that max paren level = 0
-                                                     queued_hint=None,
-                                                     loose_indents_dedents=lexer_state.loose_indents_dedents,
-                                                     initial_indents_include=(),
-                                                     init_max_indent=indent - 1
-                                                 )))
-
-                    if lexer_state.loose_indents_dedents == "none_or_dedent_first":
-                        # Case where the first newline stays on the same level or dedents
-                        possible_results.append(
-                            ((inner_token, Token(DEDENT_type, "", loose_behavior=True, max_loosiness=None)),
-                             PythonIndenterState(
-                                 indent_levels=(indent,),
-                                 current_paren_diff_level=lexer_state.current_paren_diff_level,
-                                 init_min_paren_level=lexer_state.init_min_paren_level,
-                                 init_max_paren_level=lexer_state.init_min_paren_level,
-                                 queued_hint=None,
-                                 loose_indents_dedents=lexer_state.loose_indents_dedents,
-                                 initial_indents_include=(indent,),
-                                 init_max_indent=None
-                             )))
-                elif indent > lexer_state.indent_levels[-1]:
-                    possible_results.append(((inner_token, Token(INDENT_type, "")),
-                                             PythonIndenterState(
-                                                 indent_levels=lexer_state.indent_levels + (indent,),
-                                                 current_paren_diff_level=lexer_state.current_paren_diff_level,
-                                                 init_min_paren_level=lexer_state.init_min_paren_level,
-                                                 init_max_paren_level=lexer_state.init_min_paren_level,
-                                                 queued_hint=None,
-                                                 loose_indents_dedents=lexer_state.loose_indents_dedents,
-                                                 initial_indents_include=lexer_state.initial_indents_include,
-                                                 init_max_indent=lexer_state.init_max_indent
-                                             )))
-                else:
-                    if lexer_state.loose_indents_dedents:
-                        # We need to insert dedents.
-                        # If we know all the indents which could possibly be along the way, then we know exactly how
-                        # many dedents need to be inserted. But if we dedent more than that, then there is some
-                        # uncertainty about how many dedents are actually needed (and thus we insert "loose" dedents)
-                        loose_dedent_result = insert_loose_dedents(
-                            current_indentation_levels=lexer_state.indent_levels,
-                            new_indentation_level=indent
-                        )
-
-                        if loose_dedent_result is None:
-                            # This branch is not allowed, don't add anything to possible_results
-                            pass
-                        else:
-                            num_strict_dedents, do_loose_dedent, loosiness, \
-                                current_indent_levels, seen_new_initial_indent = loose_dedent_result
-
-                            result_tokens = [inner_token]
-
-                            for _ in range(num_strict_dedents):
-                                result_tokens.append(Token(DEDENT_type, ""))
-
-                            if do_loose_dedent:
-                                result_tokens.append(Token(DEDENT_type, "", loose_behavior=True,
-                                                           max_loosiness=loosiness))
-
-                            if seen_new_initial_indent:
-                                next_initial_indents_include = lexer_state.initial_indents_include + (indent,)
-                            else:
-                                next_initial_indents_include = lexer_state.initial_indents_include
-
-                            possible_results.append((tuple(result_tokens),
+                        if indent != 0 and lexer_state.loose_indents_dedents == "indent_first":
+                            # Handle case where the first newline is really an indent
+                            possible_results.append(((inner_token, Token(INDENT_type, "")),
                                                      PythonIndenterState(
-                                                         indent_levels=current_indent_levels,
+                                                         indent_levels=(indent,),
+                                                         current_paren_diff_level=lexer_state.current_paren_diff_level,
+                                                         init_min_paren_level=lexer_state.init_min_paren_level,
+                                                         init_max_paren_level=lexer_state.init_min_paren_level,
+                                                         # So that max paren level = 0
+                                                         queued_hint=None,
+                                                         loose_indents_dedents=lexer_state.loose_indents_dedents,
+                                                         initial_indents_include=(),
+                                                         init_max_indent=indent - 1,
+                                                         only_seen_multiples_of=next_indent_multiple(indent, lexer_state.only_seen_multiples_of),
+                                                         allow_change_of_multiples=lexer_state.allow_change_of_multiples
+                                                     )))
+
+                        if lexer_state.loose_indents_dedents == "none_or_dedent_first":
+                            # Case where the first newline stays on the same level or dedents
+                            possible_results.append(
+                                ((inner_token, Token(DEDENT_type, "", loose_behavior=True, max_loosiness=None)),
+                                 PythonIndenterState(
+                                     indent_levels=(indent,),
+                                     current_paren_diff_level=lexer_state.current_paren_diff_level,
+                                     init_min_paren_level=lexer_state.init_min_paren_level,
+                                     init_max_paren_level=lexer_state.init_min_paren_level,
+                                     queued_hint=None,
+                                     loose_indents_dedents=lexer_state.loose_indents_dedents,
+                                     initial_indents_include=(indent,),
+                                     init_max_indent=None,
+                                     only_seen_multiples_of=next_indent_multiple(indent, lexer_state.only_seen_multiples_of),
+                                     allow_change_of_multiples=lexer_state.allow_change_of_multiples
+                                 )))
+                    elif indent > lexer_state.indent_levels[-1]:
+                        # Restrict to only adding one indent
+                        if lexer_state.allow_change_of_multiples or lexer_state.only_seen_multiples_of is None \
+                                or lexer_state.only_seen_multiples_of == -1 \
+                                or indent == lexer_state.indent_levels[-1] + lexer_state.only_seen_multiples_of:
+
+                            next_multiple = next_indent_multiple(indent, lexer_state.only_seen_multiples_of)
+                            if next_multiple is not None and next_multiple != -1 and \
+                                    indent != lexer_state.indent_levels[-1] + next_multiple:
+                                # Sees inconsistent indentation
+                                next_multiple = -1
+
+                            possible_results.append(((inner_token, Token(INDENT_type, "")),
+                                                     PythonIndenterState(
+                                                         indent_levels=lexer_state.indent_levels + (indent,),
                                                          current_paren_diff_level=lexer_state.current_paren_diff_level,
                                                          init_min_paren_level=lexer_state.init_min_paren_level,
                                                          init_max_paren_level=lexer_state.init_min_paren_level,
                                                          queued_hint=None,
                                                          loose_indents_dedents=lexer_state.loose_indents_dedents,
-                                                         initial_indents_include=next_initial_indents_include,
-                                                         init_max_indent=lexer_state.init_max_indent
+                                                         initial_indents_include=lexer_state.initial_indents_include,
+                                                         init_max_indent=lexer_state.init_max_indent,
+                                                         only_seen_multiples_of=next_multiple,
+                                                         allow_change_of_multiples=lexer_state.allow_change_of_multiples
                                                      )))
                     else:
-                        current_indent_levels = lexer_state.indent_levels
-                        result_tokens = [inner_token]
+                        if lexer_state.loose_indents_dedents:
+                            # We need to insert dedents.
+                            # If we know all the indents which could possibly be along the way, then we know exactly how
+                            # many dedents need to be inserted. But if we dedent more than that, then there is some
+                            # uncertainty about how many dedents are actually needed (and thus we insert "loose" dedents)
 
-                        while indent < current_indent_levels[-1]:
-                            current_indent_levels = current_indent_levels[:-1]
-                            result_tokens.append(Token(DEDENT_type, ""))
+                            next_multiple = next_indent_multiple(indent, lexer_state.only_seen_multiples_of)
 
-                        if indent == current_indent_levels[-1]:
-                            possible_results.append((tuple(result_tokens), PythonIndenterState(
-                                indent_levels=current_indent_levels,
-                                current_paren_diff_level=lexer_state.current_paren_diff_level,
-                                init_min_paren_level=lexer_state.init_min_paren_level,
-                                init_max_paren_level=lexer_state.init_min_paren_level,  # So that max paren level = 0
-                                queued_hint=None,
-                                loose_indents_dedents=lexer_state.loose_indents_dedents,
-                                initial_indents_include=lexer_state.initial_indents_include,
-                                init_max_indent=lexer_state.init_max_indent
-                            )))
+                            loose_dedent_result = insert_loose_dedents(
+                                current_indentation_levels=lexer_state.indent_levels,
+                                new_indentation_level=indent,
+                                indent_multiple=next_multiple
+                            )
+
+                            if loose_dedent_result is None:
+                                # This branch is not allowed, don't add anything to possible_results
+                                pass
+                            else:
+                                num_strict_dedents, do_loose_dedent, loosiness, \
+                                    current_indent_levels, seen_new_initial_indent = loose_dedent_result
+
+                                result_tokens = [inner_token]
+
+                                for _ in range(num_strict_dedents):
+                                    result_tokens.append(Token(DEDENT_type, ""))
+
+                                if do_loose_dedent:
+                                    result_tokens.append(Token(DEDENT_type, "", loose_behavior=True,
+                                                               max_loosiness=loosiness))
+
+                                if seen_new_initial_indent:
+                                    next_initial_indents_include = lexer_state.initial_indents_include + (indent,)
+                                else:
+                                    next_initial_indents_include = lexer_state.initial_indents_include
+
+                                possible_results.append((tuple(result_tokens),
+                                                         PythonIndenterState(
+                                                             indent_levels=current_indent_levels,
+                                                             current_paren_diff_level=lexer_state.current_paren_diff_level,
+                                                             init_min_paren_level=lexer_state.init_min_paren_level,
+                                                             init_max_paren_level=lexer_state.init_min_paren_level,
+                                                             queued_hint=None,
+                                                             loose_indents_dedents=lexer_state.loose_indents_dedents,
+                                                             initial_indents_include=next_initial_indents_include,
+                                                             init_max_indent=lexer_state.init_max_indent,
+                                                             only_seen_multiples_of=next_multiple,
+                                                             allow_change_of_multiples=lexer_state.allow_change_of_multiples
+                                                         )))
+                        else:
+                            current_indent_levels = lexer_state.indent_levels
+                            result_tokens = [inner_token]
+
+                            while indent < current_indent_levels[-1]:
+                                current_indent_levels = current_indent_levels[:-1]
+                                result_tokens.append(Token(DEDENT_type, ""))
+
+                            if indent == current_indent_levels[-1]:
+                                possible_results.append((tuple(result_tokens), PythonIndenterState(
+                                    indent_levels=current_indent_levels,
+                                    current_paren_diff_level=lexer_state.current_paren_diff_level,
+                                    init_min_paren_level=lexer_state.init_min_paren_level,
+                                    init_max_paren_level=lexer_state.init_min_paren_level,  # So that max paren level = 0
+                                    queued_hint=None,
+                                    loose_indents_dedents=lexer_state.loose_indents_dedents,
+                                    initial_indents_include=lexer_state.initial_indents_include,
+                                    init_max_indent=lexer_state.init_max_indent,
+                                    only_seen_multiples_of=next_indent_multiple(indent, lexer_state.only_seen_multiples_of),
+                                    allow_change_of_multiples=lexer_state.allow_change_of_multiples
+                                )))
 
             return possible_results
         else:  # Regular non-indent-specific token
@@ -488,7 +540,9 @@ class PythonLexWrapper(AbstractLexer[PythonLexWrapperState[TI]], Generic[TI]):
                         queued_hint=state.queued_hint,
                         loose_indents_dedents=state.loose_indents_dedents,
                         initial_indents_include=state.initial_indents_include,
-                        init_max_indent=state.init_max_indent
+                        init_max_indent=state.init_max_indent,
+                        only_seen_multiples_of=state.only_seen_multiples_of,
+                        allow_change_of_multiples=state.allow_change_of_multiples
                     ),
                     inner_state=prefix_state.inner_state
                 )
@@ -558,7 +612,10 @@ class PythonLexWrapper(AbstractLexer[PythonLexWrapperState[TI]], Generic[TI]):
                         queued_hint=None,
                         loose_indents_dedents=loose_indents_dedents,
                         initial_indents_include=(),
-                        init_max_indent=None
+                        init_max_indent=None,
+                        # If we don't know the indentation from the prefix, then we can't know the pattern in suffix
+                        only_seen_multiples_of=(-1 if lexer_state.indenter_state.only_seen_multiples_of is None else lexer_state.indenter_state.only_seen_multiples_of),
+                        allow_change_of_multiples=True
                     ),
                     inner_state=inner_lexer_state
                 )
@@ -586,7 +643,19 @@ class PythonLexWrapper(AbstractLexer[PythonLexWrapperState[TI]], Generic[TI]):
 
         return PythonLexWrapperMiddleState(
             inner_state=inner_middle_state,
-            current_indenter_state=lexer_state.prefix_indenter_state,
+            current_indenter_state=PythonIndenterState(
+                indent_levels=lexer_state.prefix_indenter_state.indent_levels,
+                current_paren_diff_level=lexer_state.prefix_indenter_state.current_paren_diff_level,
+                init_min_paren_level=lexer_state.prefix_indenter_state.init_min_paren_level,
+                init_max_paren_level=lexer_state.prefix_indenter_state.init_max_paren_level,
+                queued_hint=lexer_state.prefix_indenter_state.queued_hint,
+                init_max_indent=lexer_state.prefix_indenter_state.init_max_indent,
+                loose_indents_dedents=lexer_state.prefix_indenter_state.loose_indents_dedents,
+                initial_indents_include=lexer_state.prefix_indenter_state.initial_indents_include,
+                # Note the following two are different!
+                only_seen_multiples_of=lexer_state.suffix_indenter_state.only_seen_multiples_of,
+                allow_change_of_multiples=False
+            ),
             min_finish_paren_level=lexer_state.suffix_indenter_state.init_min_paren_level,
             max_finish_paren_level=lexer_state.suffix_indenter_state.init_max_paren_level,
             required_end_indent_levels=lexer_state.suffix_indenter_state.initial_indents_include,
@@ -597,7 +666,7 @@ class PythonLexWrapper(AbstractLexer[PythonLexWrapperState[TI]], Generic[TI]):
         return frozenset(self.lexer.get_all_possible_token_names()).union((INDENT_type, DEDENT_type))
 
 
-def insert_loose_dedents(current_indentation_levels: Tuple[int, ...], new_indentation_level: int) -> Optional[
+def insert_loose_dedents(current_indentation_levels: Tuple[int, ...], new_indentation_level: int, indent_multiple: Optional[int]) -> Optional[
     Tuple[int, bool, int, Tuple[int, ...], bool]]:
     """
     Calculate what to do when dedenting in loose indentation mode
@@ -616,8 +685,12 @@ def insert_loose_dedents(current_indentation_levels: Tuple[int, ...], new_indent
             if new_indentation_level + 1 == last_indent_level:
                 return num_dedents + 1, False, 0, (new_indentation_level,), True
             else:
-                return num_dedents + 1, True, (last_indent_level - new_indentation_level - 1), \
-                    (new_indentation_level,), True
+                if indent_multiple is None or indent_multiple == -1:
+                    return num_dedents + 1, True, (last_indent_level - new_indentation_level - 1), \
+                        (new_indentation_level,), True
+                else:
+                    return num_dedents + ((last_indent_level - new_indentation_level) // indent_multiple), \
+                        False, 0, (new_indentation_level,), True
         elif new_indentation_level > indent_levels[-1]:
             return None
         else:
@@ -627,18 +700,21 @@ def insert_loose_dedents(current_indentation_levels: Tuple[int, ...], new_indent
 
 class TestLooseDedents(unittest.TestCase):
     def test_loose_dedent_none(self):
-        self.assertEqual(insert_loose_dedents((3,), 3), (0, False, 0, (3,), False))
-        self.assertEqual(insert_loose_dedents((3, 5, 6), 6), (0, False, 0, (3, 5, 6), False))
-        self.assertEqual(insert_loose_dedents((0,), 0), (0, False, 0, (0,), False))
+        self.assertEqual(insert_loose_dedents((3,), 3, None), (0, False, 0, (3,), False))
+        self.assertEqual(insert_loose_dedents((3, 5, 6), 6, 1), (0, False, 0, (3, 5, 6), False))
+        self.assertEqual(insert_loose_dedents((0,), 0, -1), (0, False, 0, (0,), False))
 
     def test_multi_loose_dedent(self):
-        self.assertEqual(insert_loose_dedents((3, 5), 3), (1, False, 0, (3,), False))
-        self.assertEqual(insert_loose_dedents((3, 5, 6, 8), 5), (2, False, 0, (3, 5), False))
-        self.assertEqual(insert_loose_dedents((3, 5, 6, 8), 3), (3, False, 0, (3,), False))
-        self.assertEqual(insert_loose_dedents((3, 5, 6, 8), 2), (4, False, 0, (2,), True))
-        self.assertEqual(insert_loose_dedents((3, 5, 6, 8), 1), (4, True, 1, (1,), True))
-        self.assertEqual(insert_loose_dedents((3, 5, 6, 8), 0), (4, True, 2, (0,), True))
+        self.assertEqual(insert_loose_dedents((3, 5), 3, None), (1, False, 0, (3,), False))
+        self.assertEqual(insert_loose_dedents((3, 5, 6, 8), 5, None), (2, False, 0, (3, 5), False))
+        self.assertEqual(insert_loose_dedents((3, 5, 6, 8), 3, None), (3, False, 0, (3,), False))
+        self.assertEqual(insert_loose_dedents((3, 5, 6, 8), 2, None), (4, False, 0, (2,), True))
+        self.assertEqual(insert_loose_dedents((3, 5, 6, 8), 1, None), (4, True, 1, (1,), True))
+        self.assertEqual(insert_loose_dedents((3, 5, 6, 8), 0, None), (4, True, 2, (0,), True))
 
     def test_invalid_loose_dedent(self):
-        self.assertIsNone(insert_loose_dedents((3, 5, 7), 4))
-        self.assertIsNone(insert_loose_dedents((3, 5, 7), 6))
+        self.assertIsNone(insert_loose_dedents((3, 5, 7), 4, None))
+        self.assertIsNone(insert_loose_dedents((3, 5, 7), 6, None))
+
+    def test_loose_dedent_with_multiple(self):
+        self.assertEqual(insert_loose_dedents((12, 16), 4, 4), (3, False, 0, (4,), True))

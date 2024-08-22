@@ -33,6 +33,12 @@ class ContainsStatesAndCreationMethods(Protocol):
     def get_states_and_creation_methods(self) -> Sequence[Tuple[LexEarleyState, Iterable[StateCreationMethod]]]:
         ...
 
+    def __getitem__(self, idx: int) -> Tuple[LexEarleyState, Iterable[StateCreationMethod]]:
+        ...
+
+    def __len__(self) -> int:
+        ...
+
 
 def create_parse_hierarchy(grammar: SimpleBNF,
                            charts: IndexableContainer[ContainsStatesAndCreationMethods],

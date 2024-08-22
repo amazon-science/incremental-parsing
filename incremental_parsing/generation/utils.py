@@ -100,6 +100,9 @@ def try_incremental_unconstrained(prefix: str, middle: str, suffix: str) -> Tupl
     return longest_match, times
 
 
-def get_p50_p90(times: Sequence[datetime.timedelta]) -> Tuple[float, float]:
+def get_p50_p90_mean_count(times: Sequence[datetime.timedelta]) -> Tuple[Optional[float], Optional[float], Optional[float], float]:
+    if len(times) == 0:
+        return None, None, None, 0
+
     time_seconds = [time.total_seconds() for time in times]
-    return float(np.quantile(time_seconds, .5)), float(np.quantile(time_seconds, .9))
+    return float(np.quantile(time_seconds, .5)), float(np.quantile(time_seconds, .9)), sum(time_seconds) / len(time_seconds), len(time_seconds)

@@ -24,19 +24,29 @@ decorated: decorators (classdef | funcdef | async_funcdef)
 async_funcdef: "async" funcdef
 funcdef: "def" name "(" [parameters] ")" ["->" test] ":" suite
 
-parameters: paramvalue ("," paramvalue)* ["," SLASH ("," paramvalue)*] ["," [starparams | kwparams]]
-          | starparams
-          | kwparams
+parameters: slash_params_no_default ("," typedparam)* ("," paramvalue)* ("," star_etc)? ","?
+          | slash_params_with_default ("," paramvalue)* ("," star_etc)? ","?
+          | typedparam ("," typedparam)* ("," paramvalue)* ("," star_etc)? ","?
+          | paramvalue ("," paramvalue)* ("," star_etc)? ","?
+          | star_etc ","?
+SLASH: "/"
+slash_params_no_default: typedparam ("," typedparam)* "," SLASH
 
-SLASH: "/" // Otherwise the it will completely disappear and it will be undisguisable in the result
-starparams: (starparam | starguard) poststarparams
-starparam: "*" typedparam
-starguard: "*"
-poststarparams: ("," paramvalue)* ["," [kwparams]]
-kwparams: "**" typedparam ","?
+slash_params_with_default: typedparam ("," paramvalue)+ "," SLASH
+                         | paramvalue ("," paramvalue)+ "," SLASH
 
-?paramvalue: typedparam ("=" test)?
+
+star_etc: "*" typedparam ("," param_maybe_default)* ["," kwds]
+        | "*" ("," param_maybe_default)+ ["," kwds]
+        | kwds
+
+
+kwds: "**" typedparam
+
+?paramvalue: typedparam ("=" test)
 ?typedparam: name (":" test)?
+
+param_maybe_default: typedparam ("=" test)?
 
 
 lambdef: "lambda" [lambda_params] ":" test
@@ -55,9 +65,9 @@ lambda_kwparams: "**" name ","?
 expr_stmt: testlist_star_expr
 assign_stmt: annassign | augassign | assign
 
-annassign: testlist_star_expr ":" test ["=" test]
-assign: testlist_star_expr ("=" (yield_expr|testlist_star_expr))+
-augassign: testlist_star_expr augassign_op (yield_expr|testlist)
+annassign: single_target ":" test ["=" test]
+assign: (star_targets "=")+ (yield_expr|testlist_star_expr)
+augassign: single_target augassign_op (yield_expr|testlist)
 !augassign_op: "+=" | "-=" | "*=" | "@=" | "/=" | "%=" | "&=" | "|=" | "^=" | "<<=" | ">>=" | "**=" | "//="
 ?testlist_star_expr: test_or_star_expr
                    | test_or_star_expr ("," test_or_star_expr)+ ","?  -> tuple
@@ -93,7 +103,7 @@ if_stmt: "if" test ":" suite elifs ["else" ":" suite]
 elifs: elif_*
 elif_: "elif" test ":" suite
 while_stmt: "while" test ":" suite ["else" ":" suite]
-for_stmt: "for" exprlist "in" testlist ":" suite ["else" ":" suite]
+for_stmt: "for" star_targets "in" testlist ":" suite ["else" ":" suite]
 try_stmt: "try" ":" suite except_clauses ["else" ":" suite] [finally]
         | "try" ":" suite finally   -> try_finally
 finally: "finally" ":" suite
@@ -215,6 +225,28 @@ AWAIT: "await"
      | "False"   -> const_false
 
 
+star_targets: star_target ("," star_target)* ","?
+
+star_target: "*"? target_with_star_atom
+
+target_with_star_atom: atom_expr "." name
+                     | atom_expr "[" subscriptlist "]"
+                     | star_atom
+
+star_atom: name
+         | "(" target_with_star_atom ")"
+         | "(" [star_target ","] ")"
+         | "(" star_target ("," star_target)+ ","? ")"
+         | "[" [star_target ("," star_target)* ","?] "]"
+
+single_target: name
+             | atom_expr "." name
+             | atom_expr "[" subscriptlist "]"
+             | "(" single_target ")"
+
+
+
+
 ?string_concat: string+
 
 _tuple_inner: test_or_star_expr (("," test_or_star_expr)+ [","] | ",")
@@ -261,7 +293,7 @@ kwstararg: "**" test
 
 
 comprehension{comp_result}: comp_result comp_for (comp_for | comp_if)*
-comp_for: [ASYNC] "for" exprlist "in" or_test
+comp_for: [ASYNC] "for" star_targets "in" or_test
 ASYNC: "async"
 ?comp_if: "if" test_nocond
 

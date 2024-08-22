@@ -1,15 +1,21 @@
 from abc import ABCMeta, abstractmethod
-from typing import Dict, Tuple, Optional, overload, List, Generator
+from typing import Dict, Tuple, Optional, overload, List, Generator, Sequence
 
 from typing_extensions import Self
 
-from incremental_parsing.lex_earley.earley_base import process_token, charts_completable, LexEarleyAlgorithmChart
+from incremental_parsing.lex_earley.earley_base import process_token, charts_completable, LexEarleyAlgorithmChart, \
+    initial_chart_allowed_tokens
 from incremental_parsing.lex_earley.lexer import Token
 from incremental_parsing.lex_earley.simple_bnf import SimpleBNF
 from incremental_parsing.utils.lookback_trie import LookbackTrieNode
 
 
 class AbstractEarleyTrieNode(metaclass=ABCMeta):
+    @classmethod
+    @abstractmethod
+    def create_root(cls, grammar: SimpleBNF):
+        pass
+
     @abstractmethod
     def get_child(self, token: Token) -> Self:
         pass
@@ -36,7 +42,7 @@ class AbstractEarleyTrieNode(metaclass=ABCMeta):
 
     @property
     @abstractmethod
-    def allowed_token_names(self) -> Tuple[str, ...]:
+    def allowed_token_names(self) -> Sequence[str]:
         pass
 
 
@@ -44,6 +50,13 @@ class EarleyTrieNode(AbstractEarleyTrieNode):
     """
     A simple structure to cache parse results to avoid needless computation
     """
+
+    @classmethod
+    def create_root(cls, grammar: SimpleBNF):
+        initial_chart, allowed_tokens = initial_chart_allowed_tokens(grammar)
+        root_chart = LookbackTrieNode.create_root_node()
+        return cls(grammar=grammar, charts=root_chart.get_child(initial_chart), allowed_token_names=tuple(allowed_tokens))
+
     def __init__(self, grammar: SimpleBNF,
                  charts: LookbackTrieNode[LexEarleyAlgorithmChart],
                  allowed_token_names: Tuple[str, ...]):
@@ -79,8 +92,15 @@ class EarleyTrieNode(AbstractEarleyTrieNode):
     def __getitem__(self, item):
         return self.charts.__getitem__(item)
 
+    def __len__(self):
+        return len(self.charts)
+
 
 class DummyEarleyTrieNode(AbstractEarleyTrieNode):
+    @classmethod
+    def create_root(cls, grammar: SimpleBNF):
+        raise NotImplemented
+
     def __init__(self,
                  parent: Optional["DummyEarleyTrieNode"],
                  this_token: Optional[Token],

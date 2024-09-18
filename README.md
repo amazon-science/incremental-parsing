@@ -1,7 +1,10 @@
 ## Incremental Parser
 
-This repository contains code to perform incremental parsing for Python for constrained generation of code by LLMs. 
+This repository contains code to perform incremental parsing for Python for constrained generation of code by LLMs.
+It is a reference implementation of the following paper and please cite it if you find the repo useful.
 
+"[Constrained Decoding for Fill-in-the-Middle Code Language Models via Efficient Left and Right Quotienting of Context-Sensitive Grammars](https://arxiv.org/pdf/2402.17988.pdf),"
+Daniel Melcer, Nathan Fulton, Sanjay Krishna Gouda and Haifeng Qian, *arXiv:2402.17988*, 2024.
 
 ## Installation
 
